@@ -1,4 +1,4 @@
-﻿import io
+import io
 import time
 import argparse
 import joblib
@@ -34,9 +34,10 @@ XGBOOST_PARAMS = {
     "subsample": 0.8,
     "colsample_bytree": 0.8,
     "eval_metric": "mlogloss",
-    "random_state": 42,
+    "random_state": 42, #1 un 06122003
     "n_jobs": -1,
     "tree_method": "hist",
+    "device": "cuda",
 }
 
 MODEL_NAME_STRIP_PREFIX = "merged_no_nan_clean_headers_no_duplicates_train"
@@ -62,14 +63,12 @@ THIN_BORDER = Border(
     bottom=Side(style="thin"),
 )
 
-
-# Atvasina enkodiera faila ceļu no modeļa faila ceļa
 def resolve_encoder_path(model_path: str) -> Path:
     p = Path(model_path)
     return p.parent / f"{p.stem}_encoder.pkl"
 
 
-# Ielādē CSV failu un sadala datos pazīmēs un mērķa mainīgajā
+# Ielādē CSV failu 
 def load_dataset(csv_path: str, target_column: str) -> tuple[pd.DataFrame, pd.Series]:
     dataframe = pd.read_csv(csv_path, low_memory=False)
     features = dataframe.drop(columns=[target_column])
@@ -77,20 +76,12 @@ def load_dataset(csv_path: str, target_column: str) -> tuple[pd.DataFrame, pd.Se
     return features, labels
 
 
-# Enkodē klašu etiķetes skaitliskās vērtībās un saglabā enkoderi atkārtotai izmantošanai
+# Iekodē klašu etiķetes kā skaitliskas vērtībās 
 def encode_labels(labels: pd.Series, encoder_path: Path) -> tuple[np.ndarray, LabelEncoder]:
     encoder = LabelEncoder()
     encoded_labels = encoder.fit_transform(labels)
     joblib.dump(encoder, encoder_path)
     return encoded_labels, encoder
-
-
-# Aprēķina logaritmiski nogludinātos klases svarus, lai mazinātu nelīdzsvarotu klašu ietekmi
-def compute_sample_weights(encoded_labels: np.ndarray) -> np.ndarray:
-    class_counts = np.bincount(encoded_labels)
-    total_samples = len(encoded_labels)
-    smoothed_weights = np.log(1 + (total_samples / (class_counts + 1)))
-    return smoothed_weights[encoded_labels]
 
 
 # Savieno XGBoost apmācības iterācijas ar tqdm progresa joslu
@@ -107,7 +98,7 @@ class TqdmProgressCallback(TrainingCallback):
         return model
 
 
-# Ģenerē konfūzijas matricas attēlu atmiņā, lai iegultu Excel failā bez starpfailiem
+# Ģenerē pārpratuma matricas attēlu 
 def build_confusion_matrix_image(
     true_labels: np.ndarray,
     predicted_labels: np.ndarray,
@@ -148,7 +139,7 @@ def apply_cell_style(cell, is_header: bool = False) -> None:
         cell.font = ROW_FONT
 
 
-# Izveido kopsavilkuma lapu ar galvenēm, ja tā vēl nepastāv
+# Izveido kopsavilkuma lapu ar galvenēm
 def ensure_summary_sheet(workbook: Workbook) -> None:
     if SUMMARY_SHEET_NAME not in workbook.sheetnames:
         sheet = workbook.create_sheet(SUMMARY_SHEET_NAME, 0)
@@ -199,7 +190,7 @@ def append_summary_row(
         apply_cell_style(cell)
 
 
-# Izveido atsevišķu lapu datu kopai ar pilnu klasifikācijas pārskatu, feature importance un konfūzijas matricu
+# Izveido atsevišķu lapu datu kopai ar pilnu klasifikācijas pārskatu
 def write_detail_sheet(
     workbook: Workbook,
     dataset_name: str,
@@ -211,7 +202,6 @@ def write_detail_sheet(
     encoder: LabelEncoder,
     feature_importance: pd.Series,
 ) -> None:
-    # Noņem kopējo prefiksu, lai lapas nosaukumā paliktu tikai unikālā daļa
     common_prefix = "merged_no_nan_clean_headers_no_duplicates"
     display_name = dataset_name[len(common_prefix):].lstrip("_") if dataset_name.startswith(common_prefix) else dataset_name
     base_name = display_name[:31]
@@ -279,7 +269,6 @@ def write_detail_sheet(
             cell = sheet.cell(row=report_start_row + row_offset, column=col_index, value=value)
             apply_cell_style(cell)
 
-    # Feature importance tabula — parāda pazīmju nozīmību konkrētajā datu kopā
     importance_start_row = report_start_row + len(class_names) + 2
     importance_headers = ["Pazīme", "Svarīgums (Svars)"]
 
@@ -387,16 +376,14 @@ def train_model(csv_path: str, target_column: str) -> None:
     print(f"Rindas: {len(features):,}  |  Pazīmes: {features.shape[1]}  |  Klases: {labels.nunique()}\n")
 
     encoded_labels, encoder = encode_labels(labels, encoder_path)
-    sample_weights = compute_sample_weights(encoded_labels)
 
     total_trees = XGBOOST_PARAMS["n_estimators"]
     model = XGBClassifier(**XGBOOST_PARAMS, callbacks=[TqdmProgressCallback(total_trees)])
 
     training_start = time.time()
-    model.fit(features, encoded_labels, sample_weight=sample_weights, verbose=False)
+    model.fit(features, encoded_labels, verbose=False)
     training_duration = time.time() - training_start
 
-    # Noņem callback pirms saglabāšanas, lai izvairītos no serializācijas kļūdām
     model.set_params(callbacks=None)
     joblib.dump(model, model_path)
 
@@ -504,7 +491,6 @@ def parse_arguments() -> argparse.Namespace:
 if __name__ == "__main__":
     arguments = parse_arguments()
 
-    # Ja nav padoti argumenti, palaiž interaktīvo izvēlni
     if arguments.mode is None:
         run_interactive_menu()
     elif arguments.mode == "train":
